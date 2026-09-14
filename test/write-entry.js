@@ -350,6 +350,91 @@ t.test('hardlinks far away', t => {
   })
 })
 
+// Windows reports a 64-bit file index, but fs.Stats surfaces ino as a double,
+// so two distinct files can round to the same value and collide in the link
+// cache. See #431, where ino 9570149211882252 was reported for two unrelated
+// files whose BigIntStats inos were ...252 and ...253.
+const unsafeIno = 9570149211882252
+
+t.test('unsafe ino is not used to identify hardlinks', t => {
+  t.teardown(
+    mutateFS.statMutate((_er, st) => {
+      if (st) {
+        st.dev = 204880295
+        st.ino = unsafeIno
+        st.nlink = 2
+      }
+    }),
+  )
+
+  const linkCache = new Map()
+  new WriteEntrySync('one-byte.txt', { cwd: files, linkCache })
+  const ws = new WriteEntrySync('512-bytes.txt', { cwd: files, linkCache })
+
+  t.equal(ws.type, 'File', 'unrelated file is not archived as a hardlink')
+  t.equal(ws.linkpath, undefined)
+  t.equal(ws.stat.size, 512, 'contents are still packed')
+  t.equal(
+    linkCache.size,
+    0,
+    'an ino that cannot identify a file is not cached',
+  )
+  t.end()
+})
+
+t.test('unsafe ino is not used to identify hardlinks, async', t => {
+  t.teardown(
+    mutateFS.statMutate((_er, st) => {
+      if (st) {
+        st.dev = 204880295
+        st.ino = unsafeIno
+        st.nlink = 2
+      }
+    }),
+  )
+
+  const linkCache = new Map()
+  const first = new WriteEntry('one-byte.txt', { cwd: files, linkCache })
+  first.on('end', () => {
+    const ws = new WriteEntry('512-bytes.txt', { cwd: files, linkCache })
+    ws.on('end', () => {
+      t.equal(
+        ws.type,
+        'File',
+        'unrelated file is not archived as a hardlink',
+      )
+      t.equal(ws.linkpath, undefined)
+      t.equal(linkCache.size, 0)
+      t.end()
+    })
+    ws.resume()
+  })
+  first.resume()
+})
+
+// control: a safe ino still identifies hardlinks, so the guard above only
+// suppresses values that cannot tell two files apart.
+t.test('safe ino still identifies hardlinks', t => {
+  t.teardown(
+    mutateFS.statMutate((_er, st) => {
+      if (st) {
+        st.dev = 204880295
+        st.ino = Number.MAX_SAFE_INTEGER
+        st.nlink = 2
+      }
+    }),
+  )
+
+  const linkCache = new Map()
+  new WriteEntrySync('one-byte.txt', { cwd: files, linkCache })
+  const ws = new WriteEntrySync('512-bytes.txt', { cwd: files, linkCache })
+
+  t.equal(ws.type, 'Link')
+  t.equal(ws.linkpath, 'one-byte.txt')
+  t.equal(linkCache.size, 1)
+  t.end()
+})
+
 t.test('really deep path', t => {
   const f =
     'long-path/r/e/a/l/l/y/-/d/e/e/p/-/f/o/l/d/e/r/-/p/a/t/h/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
