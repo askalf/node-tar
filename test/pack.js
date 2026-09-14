@@ -1959,3 +1959,48 @@ t.test('avoid permanent link deferral', async t => {
     new Set(['pkgB/index.js', 'pkgB/foo.js', 'pkgB/dist/index.js']),
   )
 })
+
+// The link cache is shared with Pack, which keys PENDINGLINKS on the same
+// `${dev}:${ino}` string and gates deferral on a linkCache miss. Suppressing
+// the cache for unsafe inodes makes every such file miss that lookup rather
+// than only the first, so all of them take the deferral branch -- check the
+// stream still ends and every file is packed with its own contents.
+t.test('unsafe ino does not defer or collapse entries in Pack', t => {
+  const unsafeIno = 9570149211882252
+  t.teardown(
+    mutateFS.statMutate((_er, st) => {
+      if (st && st.isFile()) {
+        st.dev = 204880295
+        st.ino = unsafeIno
+        st.nlink = 2
+      }
+    }),
+  )
+
+  const seen = []
+  new Pack({ cwd: files, jobs: 999 })
+    .add('one-byte.txt')
+    .add('512-bytes.txt')
+    .add('1024-bytes.txt')
+    .end()
+    .pipe(
+      new Parser({
+        onReadEntry(entry) {
+          seen.push([entry.path, entry.type, entry.size])
+          entry.resume()
+        },
+      }),
+    )
+    .on('end', () => {
+      t.strictSame(
+        seen,
+        [
+          ['one-byte.txt', 'File', 1],
+          ['512-bytes.txt', 'File', 512],
+          ['1024-bytes.txt', 'File', 1024],
+        ],
+        'every file packed in full, none collapsed into a Link',
+      )
+      t.end()
+    })
+})

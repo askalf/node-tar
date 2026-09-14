@@ -435,6 +435,97 @@ t.test('safe ino still identifies hardlinks', t => {
   t.end()
 })
 
+t.test(
+  'ino one past the safe limit is not used to identify hardlinks',
+  t => {
+    t.teardown(
+      mutateFS.statMutate((_er, st) => {
+        if (st) {
+          st.dev = 204880295
+          st.ino = Number.MAX_SAFE_INTEGER + 1
+          st.nlink = 2
+        }
+      }),
+    )
+
+    const linkCache = new Map()
+    new WriteEntrySync('one-byte.txt', { cwd: files, linkCache })
+    const ws = new WriteEntrySync('512-bytes.txt', {
+      cwd: files,
+      linkCache,
+    })
+
+    t.equal(
+      ws.type,
+      'File',
+      'unrelated file is not archived as a hardlink',
+    )
+    t.equal(ws.linkpath, undefined)
+    t.equal(ws.stat.size, 512, 'contents are still packed')
+    t.equal(linkCache.size, 0)
+    t.end()
+  },
+)
+
+// The guard has to suppress the cache *read* as well as the write: a link
+// cache is an option, so it can arrive already carrying an unsafe key from
+// another Pack, and a fix that only skipped the `set` would still hardlink
+// against it.
+t.test(
+  'unsafe ino does not consume a link cache entry it did not write',
+  t => {
+    t.teardown(
+      mutateFS.statMutate((_er, st) => {
+        if (st) {
+          st.dev = 204880295
+          st.ino = unsafeIno
+          st.nlink = 2
+        }
+      }),
+    )
+
+    const linkCache = new Map([
+      [`204880295:${unsafeIno}`, path.resolve(files, 'one-byte.txt')],
+    ])
+    const ws = new WriteEntrySync('512-bytes.txt', {
+      cwd: files,
+      linkCache,
+    })
+
+    t.equal(
+      ws.type,
+      'File',
+      'unrelated file is not archived as a hardlink',
+    )
+    t.equal(ws.linkpath, undefined)
+    t.equal(ws.stat.size, 512, 'contents are still packed')
+    t.end()
+  },
+)
+
+// control: ino 0 is falsy but a perfectly good identity, so it must keep
+// working -- the guard is Number.isSafeInteger, not a truthiness check.
+t.test('ino of 0 still identifies hardlinks (control)', t => {
+  t.teardown(
+    mutateFS.statMutate((_er, st) => {
+      if (st) {
+        st.dev = 204880295
+        st.ino = 0
+        st.nlink = 2
+      }
+    }),
+  )
+
+  const linkCache = new Map()
+  new WriteEntrySync('one-byte.txt', { cwd: files, linkCache })
+  const ws = new WriteEntrySync('512-bytes.txt', { cwd: files, linkCache })
+
+  t.equal(ws.type, 'Link')
+  t.equal(ws.linkpath, 'one-byte.txt')
+  t.equal(linkCache.size, 1)
+  t.end()
+})
+
 t.test('really deep path', t => {
   const f =
     'long-path/r/e/a/l/l/y/-/d/e/e/p/-/f/o/l/d/e/r/-/p/a/t/h/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
