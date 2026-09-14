@@ -2047,3 +2047,45 @@ t.test('unsafe ino does not collapse entries in PackSync', t => {
   )
   t.end()
 })
+// `linkCache` is a public option on Pack too, and Pack both reads it at
+// pack.ts:285 to decide whether to defer and hands it to every WriteEntry it
+// builds. A cache arriving with an unsafe key already in it must not make a
+// packed file collapse into a Link -- the WriteEntry-level test covers the
+// same read side for a single entry, this one through the Pack stream.
+t.test('unsafe ino does not consume an inherited Pack link cache', t => {
+  const unsafeIno = 9570149211882252
+  t.teardown(
+    mutateFS.statMutate((_er, st) => {
+      if (st && st.isFile()) {
+        st.dev = 204880295
+        st.ino = unsafeIno
+        st.nlink = 2
+      }
+    }),
+  )
+
+  const linkCache = new Map([
+    [`204880295:${unsafeIno}`, path.resolve(files, 'one-byte.txt')],
+  ])
+
+  const seen = []
+  new Pack({ cwd: files, linkCache })
+    .add('512-bytes.txt')
+    .end()
+    .pipe(
+      new Parser({
+        onReadEntry(entry) {
+          seen.push([entry.path, entry.type, entry.size])
+          entry.resume()
+        },
+      }),
+    )
+    .on('end', () => {
+      t.strictSame(
+        seen,
+        [['512-bytes.txt', 'File', 512]],
+        'an inherited unsafe key does not turn the entry into a Link',
+      )
+      t.end()
+    })
+})

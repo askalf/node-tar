@@ -570,6 +570,47 @@ t.test('safe and unsafe inos share one link cache', t => {
   t.end()
 })
 
+// control: a cached path outside the cwd is rejected by the pre-existing
+// `linkpath?.indexOf(this.cwd) === 0` check inside the guarded block, and the
+// entry is re-cached under its own absolute path. That fall-through sits on
+// the far side of the changed predicate for a *safe* ino, so the guard must
+// not disturb it -- green on both arms by design.
+t.test(
+  'safe ino outside the cwd still falls through to File (control)',
+  t => {
+    const safeIno = 4242
+    t.teardown(
+      mutateFS.statMutate((_er, st) => {
+        if (st) {
+          st.dev = 204880295
+          st.ino = safeIno
+          st.nlink = 2
+        }
+      }),
+    )
+
+    const linkCache = new Map([[`204880295:${safeIno}`, '/a/b/c/d/e']])
+    const ws = new WriteEntrySync('512-bytes.txt', {
+      cwd: files,
+      linkCache,
+    })
+
+    t.equal(
+      ws.type,
+      'File',
+      'a cached path outside the cwd is not linked to',
+    )
+    t.equal(ws.linkpath, undefined)
+    t.equal(ws.stat.size, 512, 'contents are still packed')
+    t.strictSame(
+      [...linkCache.values()],
+      [path.resolve(files, '512-bytes.txt')],
+      'the entry re-caches its own absolute path',
+    )
+    t.end()
+  },
+)
+
 t.test('really deep path', t => {
   const f =
     'long-path/r/e/a/l/l/y/-/d/e/e/p/-/f/o/l/d/e/r/-/p/a/t/h/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
