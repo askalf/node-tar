@@ -526,6 +526,50 @@ t.test('ino of 0 still identifies hardlinks (control)', t => {
   t.end()
 })
 
+// A safe and an unsafe ino sharing one link cache. Every test above uses a
+// single ino per cache, so nothing yet pins that the guard is decided per
+// entry rather than per cache: the safe pair must still link while the unsafe
+// pair does not, against the same Map.
+t.test('safe and unsafe inos share one link cache', t => {
+  const safeIno = 4242
+  t.teardown(
+    mutateFS.statMutate((_er, st) => {
+      if (st) {
+        st.dev = 204880295
+        st.nlink = 2
+        st.ino = st.size === 1024 ? safeIno : unsafeIno
+      }
+    }),
+  )
+
+  const linkCache = new Map()
+
+  // the unsafe pair: neither file may be cached or linked
+  new WriteEntrySync('one-byte.txt', { cwd: files, linkCache })
+  const unsafe = new WriteEntrySync('512-bytes.txt', {
+    cwd: files,
+    linkCache,
+  })
+  t.equal(unsafe.type, 'File', 'unsafe ino is not archived as a hardlink')
+  t.equal(unsafe.linkpath, undefined)
+
+  // the safe pair, in the same cache: still linked
+  new WriteEntrySync('1024-bytes.txt', { cwd: files, linkCache })
+  const safe = new WriteEntrySync('1024-bytes.txt', {
+    cwd: files,
+    linkCache,
+  })
+  t.equal(safe.type, 'Link', 'safe ino in the same cache still links')
+  t.equal(safe.linkpath, '1024-bytes.txt')
+
+  t.strictSame(
+    [...linkCache.keys()],
+    [`204880295:${safeIno}`],
+    'only the safe ino is cached',
+  )
+  t.end()
+})
+
 t.test('really deep path', t => {
   const f =
     'long-path/r/e/a/l/l/y/-/d/e/e/p/-/f/o/l/d/e/r/-/p/a/t/h/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'

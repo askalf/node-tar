@@ -2004,3 +2004,46 @@ t.test('unsafe ino does not defer or collapse entries in Pack', t => {
       t.end()
     })
 })
+
+// PackSync takes the other side of the `!this.sync` condition at pack.ts:285:
+// a sync pack never defers, it walks each job in order, so the link cache is
+// the only thing deciding whether a later file becomes a Link. The async test
+// above exercises the deferral branch, this one the branch that skips it.
+t.test('unsafe ino does not collapse entries in PackSync', t => {
+  const unsafeIno = 9570149211882252
+  t.teardown(
+    mutateFS.statMutate((_er, st) => {
+      if (st && st.isFile()) {
+        st.dev = 204880295
+        st.ino = unsafeIno
+        st.nlink = 2
+      }
+    }),
+  )
+
+  const data = new PackSync({ cwd: files })
+    .add('one-byte.txt')
+    .add('512-bytes.txt')
+    .add('1024-bytes.txt')
+    .end()
+    .read()
+
+  const seen = []
+  for (let i = 0; i < data.length; i += 512) {
+    const h = new Header(data.subarray(i, i + 512))
+    if (h.nullBlock || !h.path) break
+    seen.push([h.path, h.type, h.size])
+    if (h.size) i += Math.ceil(h.size / 512) * 512
+  }
+
+  t.strictSame(
+    seen,
+    [
+      ['one-byte.txt', 'File', 1],
+      ['512-bytes.txt', 'File', 512],
+      ['1024-bytes.txt', 'File', 1024],
+    ],
+    'every file packed in full, none collapsed into a Link',
+  )
+  t.end()
+})
